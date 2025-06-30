@@ -1,3 +1,8 @@
+# What is this fork about?
+
+- Add support for Threads
+- Instagram extractor also downloads images
+
 <!-- MANPAGE: BEGIN EXCLUDED SECTION -->
 <div align="center">
 
