@@ -571,10 +571,6 @@ from .dw import (
     DWIE,
     DWArticleIE,
 )
-from .eagleplatform import (
-    ClipYouEmbedIE,
-    EaglePlatformIE,
-)
 from .ebaumsworld import EbaumsWorldIE
 from .ebay import EbayIE
 from .egghead import (
@@ -1785,6 +1781,7 @@ from .rtve import (
     RTVEALaCartaIE,
     RTVEAudioIE,
     RTVELiveIE,
+    RTVEProgramIE,
     RTVETelevisionIE,
 )
 from .rtvs import RTVSIE
@@ -2242,6 +2239,7 @@ from .tvplay import (
 from .tvplayer import TVPlayerIE
 from .tvw import (
     TvwIE,
+    TvwNewsIE,
     TvwTvChannelsIE,
 )
 from .tweakers import TweakersIE
