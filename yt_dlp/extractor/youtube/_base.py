@@ -105,7 +105,6 @@ INNERTUBE_CLIENTS = {
         'INNERTUBE_CONTEXT_CLIENT_NAME': 1,
         'SUPPORTS_COOKIES': True,
         **WEB_PO_TOKEN_POLICIES,
-        'PLAYER_PARAMS': '8AEB2AMB',
     },
     # Safari UA returns pre-merged video+audio 144p/240p/360p/720p/1080p HLS formats
     'web_safari': {
@@ -119,7 +118,6 @@ INNERTUBE_CLIENTS = {
         'INNERTUBE_CONTEXT_CLIENT_NAME': 1,
         'SUPPORTS_COOKIES': True,
         **WEB_PO_TOKEN_POLICIES,
-        'PLAYER_PARAMS': '8AEB2AMB',
     },
     'web_embedded': {
         'INNERTUBE_CONTEXT': {
@@ -261,9 +259,8 @@ INNERTUBE_CLIENTS = {
                 not_required_with_player_token=True,
             ),
             # HLS Livestreams require POT 30 seconds in
-            # TODO: Rolling out
             StreamingProtocol.HLS: GvsPoTokenPolicy(
-                required=False,
+                required=True,
                 recommended=True,
                 not_required_with_player_token=True,
             ),
@@ -282,7 +279,6 @@ INNERTUBE_CLIENTS = {
                 'userAgent': 'Mozilla/5.0 (iPad; CPU OS 16_7_10 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1,gzip(gfe)',
             },
         },
-        'PLAYER_PARAMS': '8AEB2AMB',
         'INNERTUBE_CONTEXT_CLIENT_NAME': 2,
         'GVS_PO_TOKEN_POLICY': {
             StreamingProtocol.HTTPS: GvsPoTokenPolicy(
@@ -309,12 +305,12 @@ INNERTUBE_CLIENTS = {
             'client': {
                 'clientName': 'TVHTML5',
                 'clientVersion': '7.20250312.16.00',
-                'userAgent': 'Mozilla/5.0 (ChromiumStylePlatform) Cobalt/Version',
+                # See: https://github.com/youtube/cobalt/blob/main/cobalt/browser/user_agent/user_agent_platform_info.cc#L506
+                'userAgent': 'Mozilla/5.0 (ChromiumStylePlatform) Cobalt/25.lts.30.1034943-gold (unlike Gecko), Unknown_TV_Unknown_0/Unknown (Unknown, Unknown)',
             },
         },
         'INNERTUBE_CONTEXT_CLIENT_NAME': 7,
         'SUPPORTS_COOKIES': True,
-        'PLAYER_PARAMS': '8AEB2AMB',
     },
     'tv_simply': {
         'INNERTUBE_CONTEXT': {
@@ -955,7 +951,16 @@ class YoutubeBaseInfoExtractor(InfoExtractor):
             headers=traverse_obj(self._get_default_ytcfg(client), {
                 'User-Agent': ('INNERTUBE_CONTEXT', 'client', 'userAgent', {str}),
             }))
-        return self.extract_ytcfg(video_id, webpage) or {}
+
+        ytcfg = self.extract_ytcfg(video_id, webpage) or {}
+
+        # Workaround for https://github.com/yt-dlp/yt-dlp/issues/12563
+        if client == 'tv':
+            config_info = traverse_obj(ytcfg, (
+                'INNERTUBE_CONTEXT', 'client', 'configInfo', {dict})) or {}
+            config_info.pop('appInstallData', None)
+
+        return ytcfg
 
     @staticmethod
     def _build_api_continuation_query(continuation, ctp=None):
