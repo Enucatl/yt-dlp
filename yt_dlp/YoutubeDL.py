@@ -36,6 +36,7 @@ from .extractor.openload import PhantomJSwrapper
 from .globals import (
     IN_CLI,
     LAZY_EXTRACTORS,
+    WINDOWS_VT_MODE,
     plugin_ies,
     plugin_ies_overrides,
     plugin_pps,
@@ -52,7 +53,7 @@ from .networking.exceptions import (
     SSLError,
     network_exceptions,
 )
-from .networking.impersonate import ImpersonateRequestHandler
+from .networking.impersonate import ImpersonateRequestHandler, ImpersonateTarget
 from .plugins import directories as plugin_directories, load_all_plugins
 from .postprocessor import (
     EmbedThumbnailPP,
@@ -72,6 +73,7 @@ from .postprocessor.ffmpeg import resolve_mapping as resolve_recode_mapping
 from .update import (
     REPOSITORY,
     _get_system_deprecation,
+    _get_outdated_warning,
     _make_label,
     current_git_head,
     detect_variant,
@@ -503,6 +505,7 @@ class YoutubeDL:
     force_keyframes_at_cuts: Re-encode the video when downloading ranges to get precise cuts
     noprogress:        Do not print the progress bar
     live_from_start:   Whether to download livestreams videos from the start
+    warn_when_outdated: Emit a warning if the yt-dlp version is older than 90 days
 
     The following parameters are not used by YoutubeDL itself, they are used by
     the downloader (see yt_dlp/downloader/common.py):
@@ -529,6 +532,7 @@ class YoutubeDL:
                        discontinuities such as ad breaks (default: False)
     extractor_args:    A dictionary of arguments to be passed to the extractors.
                        See "EXTRACTOR ARGUMENTS" for details.
+                       Argument values must always be a list of string(s).
                        E.g. {'youtube': {'skip': ['dash', 'hls']}}
     mark_watched:      Mark videos watched (even with --simulate). Only for YouTube
 
@@ -595,7 +599,7 @@ class YoutubeDL:
     _NUMERIC_FIELDS = {
         'width', 'height', 'asr', 'audio_channels', 'fps',
         'tbr', 'abr', 'vbr', 'filesize', 'filesize_approx',
-        'timestamp', 'release_timestamp',
+        'timestamp', 'release_timestamp', 'available_at',
         'duration', 'view_count', 'like_count', 'dislike_count', 'repost_count',
         'average_rating', 'comment_count', 'age_limit',
         'start_time', 'end_time',
@@ -605,13 +609,13 @@ class YoutubeDL:
 
     _format_fields = {
         # NB: Keep in sync with the docstring of extractor/common.py
-        'url', 'manifest_url', 'manifest_stream_number', 'ext', 'format', 'format_id', 'format_note',
+        'url', 'manifest_url', 'manifest_stream_number', 'ext', 'format', 'format_id', 'format_note', 'available_at',
         'width', 'height', 'aspect_ratio', 'resolution', 'dynamic_range', 'tbr', 'abr', 'acodec', 'asr', 'audio_channels',
         'vbr', 'fps', 'vcodec', 'container', 'filesize', 'filesize_approx', 'rows', 'columns', 'hls_media_playlist_data',
         'player_url', 'protocol', 'fragment_base_url', 'fragments', 'is_from_start', 'is_dash_periods', 'request_data',
         'preference', 'language', 'language_preference', 'quality', 'source_preference', 'cookies',
         'http_headers', 'stretched_ratio', 'no_resume', 'has_drm', 'extra_param_to_segment_url', 'extra_param_to_key_url',
-        'hls_aes', 'downloader_options', 'page_url', 'app', 'play_path', 'tc_url', 'flash_version',
+        'hls_aes', 'downloader_options', 'impersonate', 'page_url', 'app', 'play_path', 'tc_url', 'flash_version',
         'rtmp_live', 'rtmp_conn', 'rtmp_protocol', 'rtmp_real_time',
     }
     _deprecated_multivalue_fields = {
@@ -701,6 +705,9 @@ class YoutubeDL:
         system_deprecation = _get_system_deprecation()
         if system_deprecation:
             self.deprecated_feature(system_deprecation.replace('\n', '\n                    '))
+        elif self.params.get('warn_when_outdated'):
+            if outdated_warning := _get_outdated_warning():
+                self.report_warning(outdated_warning)
 
         if self.params.get('allow_unplayable_formats'):
             self.report_warning(
@@ -747,8 +754,6 @@ class YoutubeDL:
             if self.params.get('geo_verification_proxy') is None:
                 self.params['geo_verification_proxy'] = self.params['cn_verification_proxy']
 
-        check_deprecated('autonumber', '--auto-number', '-o "%(autonumber)s-%(title)s.%(ext)s"')
-        check_deprecated('usetitle', '--title', '-o "%(title)s-%(id)s.%(ext)s"')
         check_deprecated('useid', '--id', '-o "%(id)s.%(ext)s"')
 
         for msg in self.params.get('_warnings', []):
@@ -3231,6 +3236,7 @@ class YoutubeDL:
             }
         else:
             params = self.params
+
         fd = get_suitable_downloader(info, params, to_stdout=(name == '-'))(self, params)
         if not test:
             for ph in self._progress_hooks:
@@ -3706,6 +3712,8 @@ class YoutubeDL:
                 return {k: filter_fn(v) for k, v in obj.items() if not reject(k, v)}
             elif isinstance(obj, (list, tuple, set, LazyList)):
                 return list(map(filter_fn, obj))
+            elif isinstance(obj, ImpersonateTarget):
+                return str(obj)
             elif obj is None or isinstance(obj, (str, int, float, bool)):
                 return obj
             else:
@@ -4036,8 +4044,7 @@ class YoutubeDL:
             if os.environ.get('TERM', '').lower() == 'dumb':
                 additional_info.append('dumb')
             if not supports_terminal_sequences(stream):
-                from .utils import WINDOWS_VT_MODE  # Must be imported locally
-                additional_info.append('No VT' if WINDOWS_VT_MODE is False else 'No ANSI')
+                additional_info.append('No VT' if WINDOWS_VT_MODE.value is False else 'No ANSI')
             if additional_info:
                 ret = f'{ret} ({",".join(additional_info)})'
             return ret
@@ -4182,6 +4189,31 @@ class YoutubeDL:
             rh.is_supported_target(target)
             for rh in self._request_director.handlers.values()
             if isinstance(rh, ImpersonateRequestHandler))
+
+    def _parse_impersonate_targets(self, impersonate):
+        if impersonate in (True, ''):
+            impersonate = ImpersonateTarget()
+
+        requested_targets = [
+            t if isinstance(t, ImpersonateTarget) else ImpersonateTarget.from_str(t)
+            for t in variadic(impersonate)
+        ] if impersonate else []
+
+        available_target = next(filter(self._impersonate_target_available, requested_targets), None)
+
+        return available_target, requested_targets
+
+    @staticmethod
+    def _unavailable_targets_message(requested_targets, note=None, is_error=False):
+        note = note or 'The extractor specified to use impersonation for this download'
+        specific_targets = ', '.join(filter(None, map(str, requested_targets)))
+        message = (
+            'no impersonate target is available' if not specific_targets
+            else f'none of these impersonate targets are available: {specific_targets}')
+        return (
+            f'{note}, but {message}. {"See" if is_error else "If you encounter errors, then see"}'
+            f'  https://github.com/yt-dlp/yt-dlp#impersonation  '
+            f'for information on installing the required dependencies')
 
     def urlopen(self, req):
         """ Start an HTTP download """
