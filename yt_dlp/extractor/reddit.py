@@ -277,6 +277,24 @@ class RedditIE(InfoExtractor):
         },
         'params': {'skip_download': True},
     }, {
+        # image gallery post with i.redd.it images
+        'url': 'https://www.reddit.com/r/polymarket_bets/comments/1rovyb2/fresh_wallet_just_deposited_60000_and_bet_on/',
+        'playlist_count': 2,
+        'info_dict': {
+            'id': '1rovyb2',
+            'title': 'Fresh wallet just deposited $60,000 and bet on....',
+            'alt_title': 'Fresh wallet just deposited $60,000 and bet on....',
+            'uploader': 'Turbulent-Freedom-67',
+            'channel_id': 'polymarket_bets',
+            'timestamp': 1773049964.0,
+            'upload_date': '20260308',
+            'age_limit': 0,
+            'like_count': int,
+            'dislike_count': int,
+            'comment_count': int,
+        },
+        'params': {'skip_download': True},
+    }, {
         'url': 'https://www.reddit.com/r/videos/comments/6rrwyj',
         'only_matching': True,
     }, {
@@ -431,7 +449,10 @@ class RedditIE(InfoExtractor):
                         'height': traverse_obj(media, ('s', 'y', {int_or_none})),
                         'ext': ext,
                         'vcodec': 'none',
-                        'http_headers': {'Referer': 'https://www.reddit.com/'},
+                        'http_headers': {
+                            'Accept': '*/*',
+                            'Referer': 'https://www.reddit.com/',
+                        },
                     })
                 elif is_gallery and media_type == 'AnimatedImage':
                     mp4_url = traverse_obj(media, ('s', 'mp4', {unescapeHTML}, {url_or_none}))
