@@ -545,6 +545,10 @@ class RedditIE(InfoExtractor):
                 'display_id': video_id,
                 'url': video_url,
                 'ext': ext,
+                'http_headers': {
+                    'Accept': '*/*',
+                    'Referer': 'https://www.reddit.com/',
+                },
             }
 
         # Not hosted on reddit, must continue extraction
