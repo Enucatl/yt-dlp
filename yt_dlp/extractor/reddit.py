@@ -194,24 +194,25 @@ class RedditIE(InfoExtractor):
             'skip_download': True,
         },
     }, {
-        # subtitles from caption-url
-        'url': 'https://www.reddit.com/r/soccer/comments/1cxwzso/tottenham_1_0_newcastle_united_james_maddison_31/',
+        # subtitles in HLS manifest
+        'url': 'https://www.reddit.com/r/sports/comments/1rpvb1j/gonazagas_mario_saintsupery_being_polite_after_he/',
         'info_dict': {
-            'id': 'xbmj4t3igy1d1',
+            'id': 'edaqbu5am7og1',
             'ext': 'mp4',
-            'display_id': '1cxwzso',
-            'title': 'Tottenham [1] - 0 Newcastle United - James Maddison 31\'',
-            'alt_title': 'Tottenham [1] - 0 Newcastle United - James Maddison 31\'',
-            'uploader': 'Woodstovia',
-            'channel_id': 'soccer',
-            'duration': 30,
-            'upload_date': '20240522',
-            'timestamp': 1716373798,
+            'display_id': '1rpvb1j',
+            'title': 'Gonazaga\u2019s Mario Saint-Supery being polite after he landed on Oregon ...',
+            'alt_title': 'Gonazaga\u2019s Mario Saint-Supery being polite after he landed on Oregon State cheerleaders',
+            'uploader': 'Defvac2',
+            'channel_id': 'sports',
+            'duration': 21,
+            'upload_date': '20260310',
+            'timestamp': 1773144947.0,
             'age_limit': 0,
             'comment_count': int,
             'dislike_count': int,
             'like_count': int,
             'subtitles': {'en': 'mincount:1'},
+            'thumbnail': r're:https://external-preview\.redd\.it/.+\.png\?.*',
         },
         'params': {
             'skip_download': True,
@@ -237,6 +238,44 @@ class RedditIE(InfoExtractor):
             'timestamp': 1570438713.0,
             'upload_date': '20191007',
         },
+    }, {
+        # single image post (i.redd.it)
+        'url': 'https://www.reddit.com/r/pics/comments/1rpni97/oc_midnight_in_alaska/',
+        'info_dict': {
+            'id': '8pwts24oc5og1',
+            'display_id': '1rpni97',
+            'ext': 'jpeg',
+            'title': '[OC] Midnight in Alaska.',
+            'alt_title': '[OC] Midnight in Alaska.',
+            'uploader': 'takebreaks',
+            'channel_id': 'pics',
+            'timestamp': 1773117498.0,
+            'upload_date': '20260310',
+            'age_limit': 0,
+            'like_count': int,
+            'dislike_count': int,
+            'comment_count': int,
+            'thumbnail': r're:https://preview\.redd\.it/8pwts24oc5og1\.jpeg\?.*',
+        },
+        'params': {'skip_download': True},
+    }, {
+        # image gallery post
+        'url': 'https://www.reddit.com/r/drawings/comments/1rkxq31/my_son_7_years_loves_to_draw_avengers/',
+        'playlist_count': 2,
+        'info_dict': {
+            'id': '1rkxq31',
+            'title': 'My son, 7 years, loves to draw avengers!',
+            'alt_title': 'My son, 7 years, loves to draw avengers!',
+            'uploader': 'oscarber',
+            'channel_id': 'drawings',
+            'timestamp': 1772658689.0,
+            'upload_date': '20260304',
+            'age_limit': 0,
+            'like_count': int,
+            'dislike_count': int,
+            'comment_count': int,
+        },
+        'params': {'skip_download': True},
     }, {
         'url': 'https://www.reddit.com/r/videos/comments/6rrwyj',
         'only_matching': True,
@@ -309,7 +348,8 @@ class RedditIE(InfoExtractor):
             if isinstance(e.cause, json.JSONDecodeError):
                 if self._get_cookies('https://www.reddit.com/').get('reddit_session'):
                     raise ExtractorError('Your IP address is unable to access the Reddit API', expected=True)
-                self.raise_login_required('Account authentication is required')
+                raise ExtractorError(
+                    'Reddit blocked this request. Try passing cookies with --cookies-from-browser', expected=True)
             raise
 
         if traverse_obj(data, 'error') == 403:
@@ -366,19 +406,42 @@ class RedditIE(InfoExtractor):
 
         parsed_url = urllib.parse.urlparse(video_url)
 
-        # Check for embeds in text posts, or else raise to avoid recursing into the same reddit URL
-        if 'reddit.com' in parsed_url.netloc and f'/{video_id}/' in parsed_url.path:
+        # Check for embeds in text posts, gallery posts, or else raise to avoid recursing into the same reddit URL
+        is_gallery = data.get('is_gallery')
+        if 'reddit.com' in parsed_url.netloc and (f'/{video_id}/' in parsed_url.path or is_gallery):
             entries = []
             for media in traverse_obj(data, ('media_metadata', ...), expected_type=dict):
-                if not media.get('id') or media.get('e') != 'RedditVideo':
+                if not media.get('id'):
                     continue
+                media_type = media.get('e')
                 formats = []
-                if media.get('hlsUrl'):
-                    formats.extend(self._extract_m3u8_formats(
-                        unescapeHTML(media['hlsUrl']), video_id, 'mp4', m3u8_id='hls', fatal=False))
-                if media.get('dashUrl'):
-                    formats.extend(self._extract_mpd_formats(
-                        unescapeHTML(media['dashUrl']), video_id, mpd_id='dash', fatal=False))
+                if media_type == 'RedditVideo':
+                    if media.get('hlsUrl'):
+                        formats.extend(self._extract_m3u8_formats(
+                            unescapeHTML(media['hlsUrl']), video_id, 'mp4', m3u8_id='hls', fatal=False))
+                    if media.get('dashUrl'):
+                        formats.extend(self._extract_mpd_formats(
+                            unescapeHTML(media['dashUrl']), video_id, mpd_id='dash', fatal=False))
+                elif is_gallery and media_type == 'Image':
+                    mime = traverse_obj(media, ('m', {str})) or 'image/jpeg'
+                    ext = mime.split('/')[-1].replace('jpeg', 'jpg')
+                    formats.append({
+                        'url': f'https://i.redd.it/{media["id"]}.{ext}',
+                        'width': traverse_obj(media, ('s', 'x', {int_or_none})),
+                        'height': traverse_obj(media, ('s', 'y', {int_or_none})),
+                        'ext': ext,
+                        'vcodec': 'none',
+                        'http_headers': {'Referer': 'https://www.reddit.com/'},
+                    })
+                elif is_gallery and media_type == 'AnimatedImage':
+                    mp4_url = traverse_obj(media, ('s', 'mp4', {unescapeHTML}, {url_or_none}))
+                    gif_url = traverse_obj(media, ('s', 'gif', {unescapeHTML}, {url_or_none}))
+                    if mp4_url:
+                        formats.append({'url': mp4_url, 'ext': 'mp4',
+                                        'http_headers': {'Referer': 'https://www.reddit.com/'}})
+                    elif gif_url:
+                        formats.append({'url': gif_url, 'ext': 'gif',
+                                        'http_headers': {'Referer': 'https://www.reddit.com/'}})
                 if formats:
                     entries.append({
                         'id': media['id'],
@@ -386,6 +449,8 @@ class RedditIE(InfoExtractor):
                         'formats': formats,
                         **info,
                     })
+            if len(entries) == 1:
+                return {**entries[0], **info, 'id': entries[0]['id'], 'display_id': video_id}
             if entries:
                 return self.playlist_result(entries, video_id, **info)
             self.raise_no_formats('No media found', expected=True, video_id=video_id)
@@ -447,6 +512,18 @@ class RedditIE(InfoExtractor):
                 **info,
                 'id': parsed_url.path.split('/')[1],
                 'display_id': video_id,
+            }
+
+        if parsed_url.netloc == 'i.redd.it':
+            path = parsed_url.path
+            ext = path.rsplit('.', 1)[-1].lower() if '.' in path else 'jpg'
+            image_id = path.rsplit('/', 1)[-1].rsplit('.', 1)[0] if '/' in path else video_id
+            return {
+                **info,
+                'id': image_id,
+                'display_id': video_id,
+                'url': video_url,
+                'ext': ext,
             }
 
         # Not hosted on reddit, must continue extraction
