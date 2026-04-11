@@ -1,5 +1,11 @@
 name: Sync Upstream
 
+permissions: {}
+
+concurrency:
+  group: sync-upstream
+  cancel-in-progress: false
+
 env:
   # Required, URL to upstream (fork base)
   UPSTREAM_URL: "https://github.com/yt-dlp/yt-dlp.git"
@@ -30,10 +36,11 @@ on:
 
 jobs:
   build:
+    name: Sync fork with upstream
     runs-on: ubuntu-latest
     steps:
       - name: GitHub Sync to Upstream Repository
-        uses: Jai-JAP/sync-upstream-repo@v1.7.0
+        uses: Jai-JAP/sync-upstream-repo@29aa321b71740c6713f4cb159f5032dbe63acacb # v1.7.0
         with: 
           upstream_repo: ${{ env.UPSTREAM_URL }}
           upstream_branch: ${{ env.UPSTREAM_BRANCH }}
