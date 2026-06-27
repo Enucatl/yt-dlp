@@ -2465,5 +2465,8 @@ from .zingmp3 import (
     ZingMp3UserIE,
     ZingMp3WeekChartIE,
 )
-from .zoom import ZoomIE
+from .zoom import (
+    ZoomClipsIE,
+    ZoomIE,
+)
 from .zype import ZypeIE
