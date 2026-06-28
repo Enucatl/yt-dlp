@@ -10,6 +10,7 @@ from ..utils import (
     ExtractorError,
     bug_reports_message,
     decode_base_n,
+    determine_ext,
     encode_base_n,
     filter_dict,
     float_or_none,
@@ -85,6 +86,22 @@ class InstagramBaseIE(InfoExtractor):
     def _extract_nodes(self, nodes, is_direct=False):
         for idx, node in enumerate(nodes, start=1):
             if node.get('__typename') != 'GraphVideo' and node.get('is_video') is not True:
+                if node.get('__typename') != 'XDTGraphImage':
+                    continue
+                image_url = traverse_obj(node, 'display_url', 'display_src', expected_type=url_or_none)
+                if not image_url:
+                    continue
+                yield {
+                    'id': node.get('shortcode') or node['id'],
+                    'title': f'Image {idx}',
+                    'url': image_url,
+                    'ext': determine_ext(image_url, 'jpg'),
+                    'vcodec': 'none',
+                    'width': self._get_dimension('width', node),
+                    'height': self._get_dimension('height', node),
+                    'thumbnail': image_url,
+                    'http_headers': {'Referer': self._BASE_URL},
+                }
                 continue
 
             video_id = node.get('shortcode')
@@ -143,19 +160,29 @@ class InstagramBaseIE(InfoExtractor):
         if dash:
             formats.extend(self._parse_mpd_formats(self._parse_xml(dash, video_id), mpd_id='dash'))
 
-        return {
+        thumbnails = list(reversed(traverse_obj(product_media, (
+            'image_versions2', 'candidates',
+            lambda _, v: url_or_none(v['url']), {
+                'url': 'url',
+                'width': ('width', {int}),
+                'height': 'height',
+            },
+        ))))
+        media_info = {
             'id': video_id,
             'formats': formats,
             'duration': traverse_obj(product_media, ('video_duration', {float_or_none})),
-            'thumbnails': list(reversed(traverse_obj(product_media, (
-                'image_versions2', 'candidates',
-                lambda _, v: url_or_none(v['url']), {
-                    'url': 'url',
-                    'width': ('width', {int}),
-                    'height': 'height',
-                },
-            )))),
+            'thumbnails': thumbnails,
         }
+        if not formats and thumbnails:
+            image = thumbnails[-1]
+            media_info.pop('formats')
+            media_info.update({
+                **image,
+                'ext': determine_ext(image['url'], 'jpg'),
+                'vcodec': 'none',
+            })
+        return media_info
 
     def _extract_product(self, product_info, video_id=None, get_comments=True):
         if isinstance(product_info, list):
@@ -338,6 +365,94 @@ class InstagramIE(InstagramBaseIE):
             'Main webpage is locked behind the login page',
         ],
     }, {
+        # image-only post
+        'url': 'https://www.instagram.com/p/DaCytN6jGML/',
+        'playlist': [{
+            'info_dict': {
+                'id': 'DaCytH-jBYy',
+                'ext': 'jpg',
+                'title': 'Video by carmelitanescalzefirenze',
+                'vcodec': 'none',
+                'description': str,
+                'uploader': 'Carmelitane Scalze Firenze',
+                'uploader_id': '70990229589',
+                'channel': 'carmelitanescalzefirenze',
+                'comment_count': int,
+                'like_count': int,
+                'thumbnail': r're:^https?://.*\.jpg',
+                'timestamp': 1782465150,
+                'upload_date': '20260626',
+            },
+        }],
+        'info_dict': {
+            'id': 'DaCytN6jGML',
+            'title': 'Post by carmelitanescalzefirenze',
+            'description': str,
+            'uploader': 'Carmelitane Scalze Firenze',
+            'uploader_id': '70990229589',
+            'channel': 'carmelitanescalzefirenze',
+            'comment_count': int,
+            'like_count': int,
+            'timestamp': 1782465150,
+            'upload_date': '20260626',
+        },
+        'params': {
+            'playlist_items': '1',
+            'skip_download': True,
+        },
+    }, {
+        # mixed image and video post
+        'url': 'https://www.instagram.com/p/DY_CtnsFpnQ/',
+        'playlist': [{
+            'info_dict': {
+                'id': 'DY_CPa0NqKd',
+                'ext': 'jpg',
+                'title': 'Video by zoesaldana',
+                'vcodec': 'none',
+                'description': 'May showers ☔️, and May flowers 💐',
+                'uploader': 'Zoe Saldaña',
+                'uploader_id': '1417182214',
+                'channel': 'zoesaldana',
+                'comment_count': int,
+                'like_count': int,
+                'thumbnail': r're:^https?://.*\.jpg',
+                'timestamp': 1780191841,
+                'upload_date': '20260531',
+            },
+        }, {
+            'info_dict': {
+                'id': 'DY_CR95jVmP',
+                'ext': 'mp4',
+                'title': 'Video by zoesaldana',
+                'vcodec': str,
+                'description': 'May showers ☔️, and May flowers 💐',
+                'uploader': 'Zoe Saldaña',
+                'uploader_id': '1417182214',
+                'channel': 'zoesaldana',
+                'comment_count': int,
+                'like_count': int,
+                'thumbnail': r're:^https?://.*\.jpg',
+                'timestamp': 1780191841,
+                'upload_date': '20260531',
+            },
+        }],
+        'info_dict': {
+            'id': 'DY_CtnsFpnQ',
+            'title': 'Post by zoesaldana',
+            'description': 'May showers ☔️, and May flowers 💐',
+            'uploader': 'Zoe Saldaña',
+            'uploader_id': '1417182214',
+            'channel': 'zoesaldana',
+            'comment_count': int,
+            'like_count': int,
+            'timestamp': 1780191841,
+            'upload_date': '20260531',
+        },
+        'params': {
+            'playlist_items': '1,15',
+            'skip_download': True,
+        },
+    }, {
         # IGTV
         'url': 'https://www.instagram.com/tv/BkfuX9UB-eK/',
         'info_dict': {
@@ -474,7 +589,7 @@ class InstagramIE(InstagramBaseIE):
 
         info_dict = self._extract_product(product_info, video_id=video_id, get_comments=False)
         is_playlist = info_dict.get('_type') == 'playlist'
-        if not is_playlist and not info_dict.get('formats'):
+        if not is_playlist and not info_dict.get('formats') and not info_dict.get('url'):
             self.raise_no_formats('There is no video in this post', expected=True)
 
         comments = traverse_obj(media, (
