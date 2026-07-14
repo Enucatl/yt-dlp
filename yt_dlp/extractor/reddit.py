@@ -2,6 +2,7 @@ import json
 import urllib.parse
 
 from .common import InfoExtractor
+from ..networking import HEADRequest
 from ..utils import (
     ExtractorError,
     float_or_none,
@@ -17,7 +18,7 @@ from ..utils import (
 
 
 class RedditIE(InfoExtractor):
-    _VALID_URL = r'https?://(?:\w+\.)?reddit(?:media)?\.com/(?P<slug>(?:(?:r|user)/[^/]+/)?comments/(?P<id>[^/?#&]+))'
+    _VALID_URL = r'https?://(?:\w+\.)?reddit(?:media)?\.com/(?:(?P<slug>(?:(?:r|user)/[^/]+/)?comments/(?P<id>[^/?#&]+))|(?:r/[^/]+/)?s/(?P<short_id>[^/?#&]+))'
     _TESTS = [{
         'url': 'https://www.reddit.com/r/videos/comments/6rrwyj/that_small_heart_attack/',
         'info_dict': {
@@ -300,6 +301,9 @@ class RedditIE(InfoExtractor):
     }, {
         'url': 'https://www.redditmedia.com/r/serbia/comments/pu9wbx/ako_vu%C4%8Di%C4%87_izgubi_izbore_ja_%C4%87u_da_crknem/',
         'only_matching': True,
+    }, {
+        'url': 'https://www.reddit.com/r/Damnthatsinteresting/s/qMfsPIzjJY',
+        'only_matching': True,
     }]
 
     @property
@@ -328,7 +332,12 @@ class RedditIE(InfoExtractor):
             return {'en': [{'url': caption_url}]}
 
     def _real_extract(self, url):
-        slug, video_id = self._match_valid_url(url).group('slug', 'id')
+        slug, video_id, short_id = self._match_valid_url(url).group('slug', 'id', 'short_id')
+
+        if short_id:
+            return self.url_result(
+                self._request_webpage(HEADRequest(url), short_id, 'Resolving short link').url,
+                RedditIE)
 
         # Fallback for if old.reddit session request failed
         if not self._is_logged_in and not self._get_cookies('https://www.reddit.com/').get('loid'):
@@ -454,7 +463,10 @@ class RedditIE(InfoExtractor):
                 return {**entries[0], **info, 'id': entries[0]['id'], 'display_id': video_id}
             if entries:
                 return self.playlist_result(entries, video_id, **info)
-            self.raise_no_formats('No media found', expected=True, video_id=video_id)
+            removed_by = data.get('removed_by_category')
+            self.raise_no_formats(
+                f'No media found{f"; post was removed by {removed_by}" if removed_by else ""}',
+                expected=True, video_id=video_id)
             return {**info, 'id': video_id}
 
         # Check if media is hosted on reddit:
