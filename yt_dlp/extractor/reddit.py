@@ -441,7 +441,10 @@ class RedditIE(InfoExtractor):
                         'height': traverse_obj(media, ('s', 'y', {int_or_none})),
                         'ext': ext,
                         'vcodec': 'none',
-                        'http_headers': {'Referer': 'https://www.reddit.com/'},
+                        'http_headers': {
+                            'Accept': 'image/*',
+                            'Referer': 'https://www.reddit.com/',
+                        },
                     })
                 elif is_gallery and media_type == 'AnimatedImage':
                     mp4_url = traverse_obj(media, ('s', 'mp4', {unescapeHTML}, {url_or_none}))
@@ -537,6 +540,10 @@ class RedditIE(InfoExtractor):
                 'display_id': video_id,
                 'url': video_url,
                 'ext': ext,
+                'http_headers': {
+                    'Accept': 'image/*',
+                    'Referer': 'https://www.reddit.com/',
+                },
             }
 
         # Not hosted on reddit, must continue extraction
