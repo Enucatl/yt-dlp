@@ -9,6 +9,8 @@ from ..utils import (
     traverse_obj,
 )
 
+_GOOGLEBOT_UA = 'Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)'
+
 
 class ThreadsIE(InfoExtractor):
     _VALID_URL = r'https?://(?:www\.)?threads\.(?:net|com)/(?:@[^/]+/)?(?:post|t)/(?P<id>[^/?#&]+)'
@@ -124,9 +126,11 @@ class ThreadsIE(InfoExtractor):
 
     def _real_extract(self, url):
         post_id = self._match_id(url)
-        webpage = self._download_webpage(url, post_id, note='Downloading post page')
+        webpage = self._download_webpage(
+            url, post_id, note='Downloading post page', headers={'User-Agent': _GOOGLEBOT_UA})
 
         json_data = None
+        main_post = None
 
         json_scripts = re.findall(
             r'<script type="application/json"[^>]*?\sdata-sjs[^>]*?>(.*?)<\s*/script\s*>',
@@ -156,21 +160,25 @@ class ThreadsIE(InfoExtractor):
                 json_data = post_data
                 break
 
-        if not json_data:
+            main_post = traverse_obj(candidate_json, ('data', 'media', {dict}))
+            if main_post is not None:
+                break
+
+        if not json_data and not main_post:
             self.raise_no_formats(
                 'Could not extract post data. The post may be private or deleted. You may need to log in.',
                 expected=True,
             )
 
-        main_post = None
-        for node in json_data:
-            for item in traverse_obj(node, ('node', 'thread_items'), default=[]):
-                post_candidate = item.get('post')
-                if traverse_obj(post_candidate, 'code') == post_id:
-                    main_post = post_candidate
+        if not main_post:
+            for node in json_data:
+                for item in traverse_obj(node, ('node', 'thread_items'), default=[]):
+                    post_candidate = item.get('post')
+                    if traverse_obj(post_candidate, 'code') == post_id:
+                        main_post = post_candidate
+                        break
+                if main_post:
                     break
-            if main_post:
-                break
 
         if not main_post:
             self.raise_no_formats('Could not find post data matching the post ID.', expected=True)
