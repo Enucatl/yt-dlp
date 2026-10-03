@@ -1,7 +1,6 @@
 name: Sync Upstream
 
-permissions:
-  contents: write
+permissions: {}
 
 concurrency:
   group: sync-upstream
@@ -37,6 +36,8 @@ on:
 jobs:
   build:
     name: Sync fork with upstream
+    permissions:
+      contents: write  # Required to push the synced branch
     runs-on: ubuntu-latest
     steps:
       - name: GitHub Sync to Upstream Repository
