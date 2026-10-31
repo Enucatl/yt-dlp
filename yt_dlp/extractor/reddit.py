@@ -1,19 +1,25 @@
 import json
+import re
 import urllib.parse
 
 from .common import InfoExtractor
 from ..networking import HEADRequest
 from ..utils import (
     ExtractorError,
+    extract_attributes,
     float_or_none,
+    get_element_html_by_attribute,
+    get_element_html_by_id,
     int_or_none,
     parse_qs,
     traverse_obj,
     truncate_string,
     try_get,
     unescapeHTML,
+    unified_timestamp,
     update_url_query,
     url_or_none,
+    urljoin,
 )
 
 
@@ -311,12 +317,6 @@ class RedditIE(InfoExtractor):
         return bool(self._get_cookies('https://www.reddit.com/').get('reddit_session'))
 
     def _real_initialize(self):
-        if not self._is_logged_in:
-            # We need to get a 'loid' cookie to access the API anonymously
-            self._request_webpage(
-                'https://old.reddit.com/', None,
-                'Setting up session via old reddit', 'Session request failed', fatal=False)
-
         # Set cookie to opt-in to age-restricted subreddits
         self._set_cookie('reddit.com', 'over18', '1')
         # Set cookie to opt-in to "gated" subreddits
@@ -331,35 +331,111 @@ class RedditIE(InfoExtractor):
         if self._is_valid_url(caption_url, video_id, item='subtitles'):
             return {'en': [{'url': caption_url}]}
 
+    def _download_reddit_webpage(self, url, video_id):
+        webpage = self._download_webpage(url, video_id, impersonate=True)
+        if 'name="js_challenge"' in webpage:
+            # shortcut: only the current string-doubling challenge is supported; update if Reddit changes it.
+            challenge = self._search_regex(
+                r'\(async\s+(\w+)\s*=>\s*\1\s*\+\s*\1\)\("([\da-f]+)"\)',
+                webpage, 'JavaScript challenge', group=2, default=None)
+            if not challenge:
+                raise ExtractorError('Reddit returned an unsupported JavaScript challenge', expected=True)
+            query = self._hidden_inputs(webpage)
+            query['solution'] = challenge * 2
+            webpage = self._download_webpage(
+                url, video_id, 'Completing JavaScript challenge', query=query, impersonate=True)
+
+        canonical = extract_attributes(get_element_html_by_id('canonical-url-updater', webpage) or '').get('value')
+        if canonical and not get_element_html_by_id(f't3_{video_id}', webpage):
+            match = self._match_valid_url(canonical)
+            if match and match.group('id') == video_id:
+                webpage = self._download_webpage(canonical, video_id, 'Downloading canonical post', impersonate=True)
+        return webpage
+
+    def _extract_webpage(self, url, video_id):
+        webpage = self._download_reddit_webpage(url, video_id)
+        post = get_element_html_by_id(f't3_{video_id}', webpage)
+        if not post:
+            if re.search(r'(?i)private community|quarantined|log in to (?:view|continue)|verify your age', webpage):
+                self.raise_login_required('Reddit requires an account to view this post')
+            raise ExtractorError('Reddit did not return the post; access may be blocked', expected=True)
+        attrs = extract_attributes(post)
+        media_html = get_element_html_by_attribute('slot', 'post-media-container', post) or post
+        data = {
+            'url': urljoin(url, attrs.get('content-href')) or url,
+            'title': attrs.get('post-title'),
+            'author': attrs.get('author'),
+            'subreddit': attrs.get('subreddit-name'),
+            'created_utc': unified_timestamp(attrs.get('created-timestamp')),
+            'over_18': 'nsfw' in attrs,
+            'ups': int_or_none(attrs.get('score')),
+            'num_comments': int_or_none(attrs.get('comment-count')),
+        }
+        image = extract_attributes(self._search_regex(
+            r'(<img\b[^>]*\bid="post-image"[^>]*>)', media_html, 'post image', default=''))
+        if url_or_none(image.get('src')):
+            data['preview'] = {'images': [{'source': {'url': image['src']}}]}
+        media_metadata = {}
+        for tag in re.findall(r'<(?:img|shreddit-player)\b[^>]*>', media_html):
+            media = extract_attributes(tag)
+            src = url_or_none(media.get('src'))
+            if not src:
+                continue
+            if tag.startswith('<img'):
+                if attrs.get('post-type') not in ('image', 'gallery', 'crosspost'):
+                    continue
+                image = re.fullmatch(r'https://i\.redd\.it/([\w]+)\.(\w+)', src)
+                if not image:
+                    continue
+                media_metadata[image[1]] = {
+                    'id': image[1], 'e': 'Image', 'm': f'image/{image[2]}',
+                    's': {'x': int_or_none(media.get('width')), 'y': int_or_none(media.get('height'))},
+                }
+            elif 'gif' in media:
+                media_id = urllib.parse.urlparse(src).path.rsplit('/', 1)[-1].split('.')[0]
+                media_metadata[media_id] = {'id': media_id, 'e': 'AnimatedImage', 's': {'mp4': src}}
+            else:
+                media_id = self._search_regex(r'https://v\.redd\.it/([^/]+)', src, 'media id', default=None)
+                if not media_id:
+                    continue
+                media_metadata[media_id] = {
+                    'id': media_id, 'e': 'RedditVideo', 'hlsUrl': src,
+                    'dashUrl': f'https://v.redd.it/{media_id}/DASHPlaylist.mpd',
+                }
+                if attrs.get('post-type') in ('video', 'crosspost'):
+                    packaged = self._parse_json(media.get('packaged-media-json') or '{}', video_id, fatal=False) or {}
+                    data['url'] = f'https://v.redd.it/{media_id}'
+                    data['secure_media'] = {'reddit_video': {
+                        'fallback_url': media.get('preview') or f'https://v.redd.it/{media_id}/DASH_96.mp4',
+                        'hls_url': src,
+                        'dash_url': f'https://v.redd.it/{media_id}/DASHPlaylist.mpd',
+                        'duration': traverse_obj(packaged, ('playbackMp4s', 'duration', {int_or_none})),
+                    }}
+            thumbnail = url_or_none(media.get('poster'))
+            if thumbnail:
+                data['preview'] = {'images': [{'source': {'url': thumbnail}}]}
+
+        if media_metadata and not data.get('secure_media') and attrs.get('post-type') != 'image':
+            data.update(url=f'https://www.reddit.com/comments/{video_id}/', is_gallery=True, media_metadata=media_metadata)
+        return self._extract_post(data, video_id)
+
     def _real_extract(self, url):
         slug, video_id, short_id = self._match_valid_url(url).group('slug', 'id', 'short_id')
 
         if short_id:
             return self.url_result(
-                self._request_webpage(HEADRequest(url), short_id, 'Resolving short link').url,
+                self._request_webpage(HEADRequest(url), short_id, 'Resolving short link', impersonate=True).url,
                 RedditIE)
 
-        # Fallback for if old.reddit session request failed
-        if not self._is_logged_in and not self._get_cookies('https://www.reddit.com/').get('loid'):
-            self._request_webpage(
-                f'https://www.reddit.com/svc/shreddit/{slug}', video_id,
-                'Setting up session via shreddit', 'Session request failed',
-                fatal=False, impersonate=True,
-                query={
-                    'seeker-session': 'false',
-                    'render-mode': 'partial',
-                    'referer': url,
-                })
+        if not self._is_logged_in:
+            return self._extract_webpage(url, video_id)
 
         try:
             data = self._download_json(
                 f'https://www.reddit.com/{slug}/.json', video_id, expected_status=403)
         except ExtractorError as e:
             if isinstance(e.cause, json.JSONDecodeError):
-                if self._is_logged_in:
-                    raise ExtractorError('Your IP address is unable to access the Reddit API', expected=True)
-                raise ExtractorError(
-                    'Reddit blocked this request. Try passing cookies with --cookies-from-browser', expected=True)
+                raise ExtractorError('Reddit blocked the authenticated metadata request', expected=True)
             raise
 
         if traverse_obj(data, 'error') == 403:
@@ -372,6 +448,9 @@ class RedditIE(InfoExtractor):
                 raise ExtractorError(f'HTTP Error 403 Forbidden; reason given: {reason}')
 
         data = data[0]['data']['children'][0]['data']
+        return self._extract_post(data, video_id)
+
+    def _extract_post(self, data, video_id):
         video_url = data['url']
 
         thumbnails = []
@@ -451,10 +530,10 @@ class RedditIE(InfoExtractor):
                     gif_url = traverse_obj(media, ('s', 'gif', {unescapeHTML}, {url_or_none}))
                     if mp4_url:
                         formats.append({'url': mp4_url, 'ext': 'mp4',
-                                        'http_headers': {'Referer': 'https://www.reddit.com/'}})
+                                        'http_headers': {'Accept': 'video/*', 'Referer': 'https://www.reddit.com/'}})
                     elif gif_url:
                         formats.append({'url': gif_url, 'ext': 'gif',
-                                        'http_headers': {'Referer': 'https://www.reddit.com/'}})
+                                        'http_headers': {'Accept': 'image/*', 'Referer': 'https://www.reddit.com/'}})
                 if formats:
                     entries.append({
                         'id': media['id'],
